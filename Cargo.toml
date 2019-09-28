@@ -1,0 +1,8 @@
+[package]
+name = "pop"
+version = "0.1.0"
+authors = ["Neowutran <me@neowutran.ovh>"]
+edition = "2018"
+
+[dependencies]
+openssl = { version = "0.10" }
