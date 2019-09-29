@@ -1,8 +1,12 @@
 [package]
-name = "pop"
+name = "pop_smtp"
 version = "0.1.0"
 authors = ["Neowutran <me@neowutran.ovh>"]
 edition = "2018"
 
 [dependencies]
 openssl = { version = "0.10" }
+docopt = "1"
+serde = { version = "1", features = ["derive"] }
+base64 = "0"
+
