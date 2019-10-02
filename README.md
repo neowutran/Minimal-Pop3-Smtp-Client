@@ -44,7 +44,7 @@ maildir ~/Mail/XXX@librem.one/INBOX/
 ### Download email
 
 ```
-./pop-smtp
+./pop_smtp
 ```
 
 ### Send email ( mutt config ) 
