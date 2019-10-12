@@ -1,6 +1,7 @@
 use base64;
 use docopt::Docopt;
 use openssl::ssl::{SslConnector, SslMethod, SslStream};
+use regex::Regex;
 use serde::Deserialize;
 use std::{
     error::Error, fs, fs::File, io, io::prelude::*, net::TcpStream, path::Path, process::Command,
@@ -113,26 +114,17 @@ struct Account {
     tls: Tls,
     password: String,
     maildir: String,
+    protocol: Protocol,
 }
 #[derive(PartialEq)]
 enum Tls {
     StartTls,
     Tls,
 }
-fn real_dir(link: &str) -> String {
-    String::from_utf8(
-        Command::new("bash")
-            .arg("-c")
-            .arg(&format!("mkdir -p {};readlink -f {}", link, link))
-            .output()
-            .expect("failed to execute process")
-            .stdout,
-    )
-    .unwrap()
-    .lines()
-    .nth(0)
-    .expect(&format!("{} doesn't exist", link))
-    .to_string()
+#[derive(PartialEq)]
+enum Protocol {
+    Pop,
+    Smtp,
 }
 fn biggest_mail_number(directory: &str) -> u32 {
     let paths = fs::read_dir(directory).unwrap();
@@ -154,18 +146,52 @@ fn default_account() -> Account {
         user: String::from(""),
         port: 995,
         tls: Tls::Tls,
+        protocol: Protocol::Pop,
         password: String::from(""),
         maildir: String::from(""),
     }
 }
+
+fn set_password(account: &mut Account) -> Result<(), Box<dyn Error>> {
+    if !Regex::new(
+        r"^([a-z0-9_+]([a-z0-9_+.]*[a-z0-9_+])?)@([a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,6})",
+    )?
+    .is_match(&account.user)
+    {
+        panic!(format!("{} is not a valid email adresse", account.user));
+    }
+    let inbox_directory = format!("/home/user/mail/{}/INBOX", account.user);
+    fs::create_dir_all(&inbox_directory)?;
+    account.maildir = inbox_directory;
+    let eval = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(&format!(
+            "/usr/bin/qubes-gpg-client-wrapper --quiet --no-tty --decrypt /home/user/mail/{}/pass.asc",
+            account.user
+        ))
+        .output()?;
+    if !eval.status.success() {
+        panic!(format!(
+            "Unable read password: {}",
+            String::from_utf8(eval.stderr)?
+        ));
+    }
+    account.password = String::from_utf8(eval.stdout)?
+        .lines()
+        .nth(0)
+        .unwrap()
+        .to_string();
+    Ok(())
+}
 fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
     let mut all_accounts = Vec::new();
     let mut account = default_account();
-    let mut file = File::open(&real_dir("~/.pop"))?;
+    let mut file = File::open("/home/user/.pop_smtp")?;
     let mut contents = String::new();
     file.read_to_string(&mut contents)?;
     for line in contents.lines() {
         if line.is_empty() {
+            set_password(&mut account)?;
             all_accounts.push(account);
             account = default_account();
             continue;
@@ -173,45 +199,24 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
         let config_line: Vec<&str> = line.splitn(2, ' ').collect();
         let key = config_line.get(0).unwrap();
         let value = config_line.get(1).unwrap();
-        if key == &"host" {
-            account.host = value.to_string();
-        } else if key == &"user" {
-            account.user = value.to_string();
-        } else if key == &"port" {
-            account.port = value.parse().unwrap();
-        } else if key == &"tls" {
-            if value == &"tls" {
-                account.tls = Tls::Tls;
-            } else if value == &"starttls" {
-                account.tls = Tls::StartTls;
-            } else {
-                panic!(format!("{} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values", value));
-            }
-        } else if key == &"maildir" {
-            account.maildir = real_dir(value);
-        } else if key == &"password" {
-            let command = value.to_string();
-            let eval = Command::new("bash")
-                .arg("-c")
-                .arg(&command)
-                .output()
-                .expect("failed to execute process");
-            if !eval.status.success() {
-                panic!(format!(
-                    "Unable to execute command: {}; {}",
-                    &command,
-                    String::from_utf8(eval.stderr)?
-                ));
-            }
-            account.password = String::from_utf8(eval.stdout)?
-                .lines()
-                .nth(0)
-                .unwrap()
-                .to_string();
-        } else {
-            panic!(format!("{} is not a known config key", key));
+        match key{
+          &"host" => account.host = value.to_string(),
+          &"user" => account.user = value.to_string(),
+          &"port" => account.port = value.parse()?,
+          &"tls" => match value{
+            &"tls" => account.tls = Tls::Tls,
+            &"starttls" => account.tls = Tls::StartTls,
+            _ => panic!(format!("{} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values", value)),
+          },
+          &"protocol" => match value{
+            &"pop" => account.protocol = Protocol::Pop,
+            &"smtp" => account.protocol = Protocol::Smtp,
+            _ => panic!(format!("{} doesn't exist for config 'protocol'. Only 'pop' and 'smtp' are acceptable values", value))
+          }
+          _ => panic!(format!("{} is not a known config key", key)),
         }
     }
+    set_password(&mut account)?;
     all_accounts.push(account);
     Ok(all_accounts)
 }
@@ -304,10 +309,9 @@ fn pop_smtp(
     let mut stream = TcpStream::connect(&format!("{}:{}", &account.host, &account.port))?;
     if account.tls == Tls::StartTls {
         println!("{}", read_unencrypted_singleline(&mut stream)?);
-        if !account.maildir.is_empty() {
-            write_unencrypted(&mut stream, "stls")?;
-        } else {
-            write_unencrypted(&mut stream, "starttls")?;
+        match account.protocol {
+            Protocol::Pop => write_unencrypted(&mut stream, "stls")?,
+            Protocol::Smtp => write_unencrypted(&mut stream, "starttls")?,
         }
         println!("{}", read_unencrypted_singleline(&mut stream)?);
     }
@@ -315,10 +319,9 @@ fn pop_smtp(
     if account.tls == Tls::Tls {
         println!("{}", read_singleline(&mut tls_stream)?);
     }
-    if !account.maildir.is_empty() {
-        download_mail(account, &mut tls_stream)?;
-    } else {
-        send_mail(account, &mut tls_stream, &args.flag_from, &args.arg_to)?;
+    match account.protocol {
+        Protocol::Pop => download_mail(account, &mut tls_stream)?,
+        Protocol::Smtp => send_mail(account, &mut tls_stream, &args.flag_from, &args.arg_to)?,
     }
     singleline_command(&mut tls_stream, "quit")?;
     Ok(())
@@ -352,7 +355,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let connector = SslConnector::builder(SslMethod::tls())?.build();
     if !args.flag_account.is_empty() {
         for account in accounts {
-            if account.user == args.flag_account && account.maildir.is_empty() {
+            if account.user == args.flag_account && account.protocol == Protocol::Smtp {
                 pop_smtp(&account, &connector, &args)?;
                 return Ok(());
             }
@@ -360,7 +363,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         panic!(format!("Account {} not found", args.flag_account));
     } else {
         for account in accounts {
-            if !account.maildir.is_empty() {
+            if account.protocol == Protocol::Pop {
                 pop_smtp(&account, &connector, &args)?;
             }
         }
