@@ -296,7 +296,14 @@ fn send_mail(
     handle.read_to_string(&mut data)?;
     write(tls_stream, "data")?;
     println!("{}", read_singleline(tls_stream)?);
-    write(tls_stream, &format!("{}\r\n.\r\n", data))?;
+
+    // Didn't found anything in the RFC, but seems like the "max" message size without a null byte
+    // is 1024 for SMTP. So I just take the full message, chunk it and add null bytes.
+    for bytes in data.as_bytes().chunks(1023) {
+        write(tls_stream, &format!("{}\0", std::str::from_utf8(bytes)?))?;
+    }
+
+    write(tls_stream, ".")?;
     println!("{}", read_singleline(tls_stream)?);
 
     Ok(())
