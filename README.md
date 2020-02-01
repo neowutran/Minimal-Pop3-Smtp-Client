@@ -1,20 +1,18 @@
-# pop_smtp
+# Minimal Pop3 Smtp Client
 
 ## Origin
 
-For my email, I usually use mpop (download mail) + neomutt + msmtp (send mail).
-I wanted to learn a bit on how pop and smtp protocol work, so I decided to replace mpop and msmtp.
+For my email, I used mpop (download mail) + neomutt + msmtp (send mail).
+I wanted to learn a bit on how pop and smtp protocol work, so I decided to write my own replacement mpop and msmtp.
 
 ## Use case
 
-Mine. 
-That means, this software have limited functionalities: Only those required for my usecase
+This software have limited functionalities: Only those required for my usecase
 
 ## "Goal" 
 
-The goal is to replace mpop ( https://marlam.de/mpop/ ) and msmtp ( https://marlam.de/msmtp/ ), for my usecase. 
-The code base should be as small as possible. 
-The code should not contains any functionality unused by myself. 
+The goal was to replace mpop ( https://marlam.de/mpop/ ) and msmtp ( https://marlam.de/msmtp/ ) in my mail setup. 
+The code base should be as small as possible.
 
 ## Config file example ( my config file. Should be ``/home/user/.pop_smtp`` )
 
@@ -53,7 +51,7 @@ set sendmail = "/home/user/pop_smtp -a XXX@neowutran.ovh"
 
 ## Current statut
 
-It work for my usecase.
+**It work** and I use it everyday.
 Support for "login" authentication method. 
 Support for TLS and StartTLS. 
 Support for Qubes OS only. 
