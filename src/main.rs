@@ -1,11 +1,16 @@
+#![forbid(unsafe_code)]
+#![deny(clippy::mem_forget)]
+
 use base64;
 use docopt::Docopt;
 use openssl::ssl::{SslConnector, SslMethod, SslStream};
 use regex::Regex;
 use serde::Deserialize;
 use std::{
-    error::Error, fs, fs::File, io, io::prelude::*, net::TcpStream, path::Path, process::Command,
+    cmp::Ordering, error::Error, fs, fs::File, io, io::prelude::*, net::TcpStream, path::Path,
+    process::Command,
 };
+use zeroize::Zeroize;
 static NEWLINE: &str = "\r\n";
 static LF: u8 = 0x0A;
 static CR: u8 = 0x0D;
@@ -18,7 +23,7 @@ fn write(stream: &mut SslStream<TcpStream>, command_str: &str) -> Result<(), Box
     Ok(())
 }
 fn write_unencrypted(stream: &mut TcpStream, command_str: &str) -> Result<(), Box<dyn Error>> {
-    stream.write(format!("{}{}", command_str, NEWLINE).as_bytes())?;
+    stream.write_all(format!("{}{}", command_str, NEWLINE).as_bytes())?;
     Ok(())
 }
 fn read_block(stream: &mut SslStream<TcpStream>) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -65,7 +70,7 @@ fn read_multiline_smtp(stream: &mut SslStream<TcpStream>) -> Result<String, Box<
     //  It is way simpler, and should handle all of my personal use cases
     let full: String = String::from_utf8((&read_block(stream)?).to_vec())?;
     let segments: Vec<&str> = full.lines().collect();
-    Ok(segments.join(&"\n"))
+    Ok(segments.join("\n"))
 }
 fn flush(to_fill: &mut Vec<u8>, to_empty: &mut Vec<u8>) {
     to_fill.append(to_empty);
@@ -75,8 +80,8 @@ fn read_singleline(stream: &mut SslStream<TcpStream>) -> Result<String, Box<dyn 
     Ok(String::from(
         String::from_utf8((&read_block(stream)?).to_vec())?
             .lines()
-            .nth(0)
-            .unwrap(),
+            .next()
+            .ok_or_else(|| "The line must exist")?,
     ))
 }
 fn read_unencrypted_singleline(stream: &mut TcpStream) -> Result<String, Box<dyn Error>> {
@@ -86,8 +91,8 @@ fn read_unencrypted_singleline(stream: &mut TcpStream) -> Result<String, Box<dyn
     Ok(String::from(
         String::from_utf8((&block).to_vec())?
             .lines()
-            .nth(0)
-            .unwrap(),
+            .next()
+            .ok_or_else(|| "The line must exist")?,
     ))
 }
 fn read_multiline_pop(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
@@ -112,7 +117,6 @@ struct Account {
     port: u32,
     user: String,
     tls: Tls,
-    password: String,
     maildir: String,
     protocol: Protocol,
 }
@@ -126,19 +130,23 @@ enum Protocol {
     Pop,
     Smtp,
 }
-fn biggest_mail_number(directory: &str) -> u32 {
-    let paths = fs::read_dir(directory).unwrap();
+fn biggest_mail_number(directory: &str) -> Result<u32, Box<dyn Error>> {
+    let paths = fs::read_dir(directory)?;
     let mut biggest = 0;
     for path in paths {
-        let path = path.unwrap().path();
-        let path_string = path.file_name().unwrap().to_str().unwrap();
+        let path = path?.path();
+        let path_string = path
+            .file_name()
+            .ok_or_else(|| "Filename must exist")?
+            .to_str()
+            .ok_or_else(|| "Filename must exist")?;
         let name: Vec<&str> = path_string.split(':').collect();
-        let current: u32 = name[0].parse().unwrap();
+        let current: u32 = name[0].parse()?;
         if current > biggest {
             biggest = current;
         }
     }
-    biggest
+    Ok(biggest)
 }
 fn default_account() -> Account {
     Account {
@@ -147,12 +155,11 @@ fn default_account() -> Account {
         port: 995,
         tls: Tls::Tls,
         protocol: Protocol::Pop,
-        password: String::from(""),
         maildir: String::from(""),
     }
 }
 
-fn set_password(account: &mut Account) -> Result<(), Box<dyn Error>> {
+fn check_account(account: &mut Account) -> Result<(), Box<dyn Error>> {
     if !Regex::new(
         r"^([a-z0-9_+]([a-z0-9_+.]*[a-z0-9_+])?)@([a-z0-9]+([\-\.]{1}[a-z0-9]+)*\.[a-z]{2,6})",
     )?
@@ -163,6 +170,11 @@ fn set_password(account: &mut Account) -> Result<(), Box<dyn Error>> {
     let inbox_directory = format!("/home/user/mail/{}/INBOX", account.user);
     fs::create_dir_all(&inbox_directory)?;
     account.maildir = inbox_directory;
+    Ok(())
+}
+
+fn get_password(account: &Account) -> Result<String, Box<dyn Error>> {
+    println!("GPG qube request: ASKING");
     let eval = Command::new("/bin/bash")
         .arg("-c")
         .arg(&format!(
@@ -170,18 +182,18 @@ fn set_password(account: &mut Account) -> Result<(), Box<dyn Error>> {
             account.user
         ))
         .output()?;
+    println!("GPG qube request: DONE");
     if !eval.status.success() {
         panic!(format!(
             "Unable read password: {}",
             String::from_utf8(eval.stderr)?
         ));
     }
-    account.password = String::from_utf8(eval.stdout)?
+    Ok(String::from_utf8(eval.stdout)?
         .lines()
-        .nth(0)
-        .unwrap()
-        .to_string();
-    Ok(())
+        .next()
+        .ok_or_else(|| "Unable to read the password")?
+        .to_string())
 }
 fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
     let mut all_accounts = Vec::new();
@@ -191,35 +203,41 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
     file.read_to_string(&mut contents)?;
     for line in contents.lines() {
         if line.is_empty() {
-            set_password(&mut account)?;
+            check_account(&mut account)?;
             all_accounts.push(account);
             account = default_account();
             continue;
         }
         let config_line: Vec<&str> = line.splitn(2, ' ').collect();
-        let key = config_line.get(0).unwrap();
-        let value = config_line.get(1).unwrap();
-        match key{
-          &"host" => account.host = value.to_string(),
-          &"user" => account.user = value.to_string(),
-          &"port" => account.port = value.parse()?,
-          &"tls" => match value{
-            &"tls" => account.tls = Tls::Tls,
-            &"starttls" => account.tls = Tls::StartTls,
+        let key = config_line
+            .get(0)
+            .ok_or_else(|| "Invalid config line structure. Expecting 'xxx xxx'")?;
+        let value = config_line
+            .get(1)
+            .ok_or_else(|| "Invalid config line structure. Expecting 'xxx xxx'")?;
+        match *key{
+          "host" => account.host = (*value).to_string(),
+          "user" => account.user = (*value).to_string(),
+          "port" => account.port = value.parse()?,
+          "tls" => match *value{
+            "tls" => account.tls = Tls::Tls,
+            "starttls" => account.tls = Tls::StartTls,
             _ => panic!(format!("{} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values", value)),
           },
-          &"protocol" => match value{
-            &"pop" => account.protocol = Protocol::Pop,
-            &"smtp" => account.protocol = Protocol::Smtp,
+          "protocol" => match *value{
+            "pop" => account.protocol = Protocol::Pop,
+            "smtp" => account.protocol = Protocol::Smtp,
             _ => panic!(format!("{} doesn't exist for config 'protocol'. Only 'pop' and 'smtp' are acceptable values", value))
           }
           _ => panic!(format!("{} is not a known config key", key)),
         }
     }
-    set_password(&mut account)?;
+    check_account(&mut account)?;
     all_accounts.push(account);
     Ok(all_accounts)
 }
+
+#[allow(clippy::cast_precision_loss)]
 fn download_mail(
     account: &Account,
     tls_stream: &mut SslStream<TcpStream>,
@@ -228,63 +246,85 @@ fn download_mail(
     fs::create_dir_all(&format!("{}/new", &account.maildir))?;
     fs::create_dir_all(&format!("{}/tmp", &account.maildir))?;
     singleline_command(tls_stream, &format!("user {}", &account.user))?;
-    singleline_command(tls_stream, &format!("pass {}", &account.password))?;
+
+    let mut password = get_password(account)?;
+    let mut password_command = format!("pass {}", &password);
+    singleline_command(tls_stream, &password_command)?;
+    password.zeroize();
+    password_command.zeroize();
 
     write(tls_stream, "stat")?;
     let stat = read_singleline(tls_stream)?;
     let stat_segments: Vec<&str> = stat.split(' ').collect();
-    let biggest_message_number: u32 = stat_segments.get(1).unwrap().parse()?;
-    let size_in_octets: u64 = stat_segments.get(2).unwrap().parse()?;
+    let biggest_message_number: u32 = stat_segments
+        .get(1)
+        .ok_or_else(|| "Invalid response to 'stat' command. Expecting space delimited response")?
+        .parse()?;
+    let size_in_octets: u64 = stat_segments
+        .get(2)
+        .ok_or_else(|| "Invalid response to 'stat' command. Expecting space delimited reponse")?
+        .parse()?;
     println!(
         "{} messages, {:.2} Mo",
         biggest_message_number,
         size_in_octets as f64 / 1_000_000.0
     );
-    let cur_biggest = biggest_mail_number(&format!("{}/cur", &account.maildir));
-    let new_biggest = biggest_mail_number(&format!("{}/new", &account.maildir));
-    let mut biggest = cur_biggest;
-    if new_biggest > cur_biggest {
-        biggest = new_biggest;
-    }
-    if biggest == biggest_message_number {
-        println!("No new messages");
-        return Ok(());
-    }
-    for message in biggest + 1..biggest_message_number + 1 {
-        let tmp_filename = format!("{}/tmp/{}", account.maildir, message);
-        let filename = format!("{}/new/{}", account.maildir, message);
-        {
-            let mut file = fs::OpenOptions::new()
-                .write(true)
-                .create(true)
-                .open(&tmp_filename)?;
-            write(tls_stream, &format!("retr {}", message))?;
-            file.write_all(&read_multiline_pop(tls_stream)?.join(&LF))?;
+    let cur_biggest = biggest_mail_number(&format!("{}/cur", &account.maildir))?;
+    let new_biggest = biggest_mail_number(&format!("{}/new", &account.maildir))?;
+    let biggest = if new_biggest > cur_biggest {
+        new_biggest
+    } else {
+        cur_biggest
+    };
+    match biggest.cmp(&biggest_message_number) {
+        Ordering::Equal => {
+            println!("No new messages");
+            Ok(())
         }
-        if Path::new(&filename).exists() {
-            fs::remove_file(&filename)?;
+        Ordering::Greater => panic!(
+            "Some mail have been deleted on your mail server and only remain in your local folder."
+        ),
+        Ordering::Less => {
+            for message in biggest + 1..=biggest_message_number {
+                let tmp_filename = format!("{}/tmp/{}", account.maildir, message);
+                let filename = format!("{}/new/{}", account.maildir, message);
+                {
+                    let mut file = fs::OpenOptions::new()
+                        .write(true)
+                        .create(true)
+                        .open(&tmp_filename)?;
+                    write(tls_stream, &format!("retr {}", message))?;
+                    file.write_all(&read_multiline_pop(tls_stream)?.join(&LF))?;
+                }
+                if Path::new(&filename).exists() {
+                    fs::remove_file(&filename)?;
+                }
+                fs::hard_link(&tmp_filename, &filename)?;
+                fs::remove_file(&tmp_filename)?;
+            }
+            Ok(())
         }
-        fs::hard_link(&tmp_filename, &filename)?;
-        fs::remove_file(&tmp_filename)?;
     }
-    Ok(())
 }
 fn send_mail(
     account: &Account,
     tls_stream: &mut SslStream<TcpStream>,
     from: &str,
-    to: &Vec<String>,
+    to: &[String],
 ) -> Result<(), Box<dyn Error>> {
     write(tls_stream, &format!("ehlo {}", &account.host))?;
     println!("{}", read_multiline_smtp(tls_stream)?);
     write(tls_stream, "auth login")?;
     println!("{}", read_singleline(tls_stream)?);
-    write(tls_stream, &format!("{}", base64::encode(&account.user)))?;
+    write(tls_stream, &base64::encode(&account.user))?;
     println!("{}", read_singleline(tls_stream)?);
-    write(
-        tls_stream,
-        &format!("{}", base64::encode(&account.password)),
-    )?;
+
+    let mut password = get_password(account)?;
+    let mut password_command = base64::encode(&password);
+    write(tls_stream, &password_command)?;
+    password.zeroize();
+    password_command.zeroize();
+
     println!("{}", read_singleline(tls_stream)?);
     singleline_command(tls_stream, &format!("mail from:<{}>", from))?;
     for recipient in to {
@@ -333,7 +373,7 @@ fn pop_smtp(
     singleline_command(&mut tls_stream, "quit")?;
     Ok(())
 }
-const USAGE: &'static str = "
+const USAGE: &str = "
 pop_smtp client for neomutt.
 
 Usage:
@@ -360,7 +400,13 @@ fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or_else(|e| e.exit());
     let accounts = read_config()?;
     let connector = SslConnector::builder(SslMethod::tls())?.build();
-    if !args.flag_account.is_empty() {
+    if args.flag_account.is_empty() {
+        for account in accounts {
+            if account.protocol == Protocol::Pop {
+                pop_smtp(&account, &connector, &args)?;
+            }
+        }
+    } else {
         for account in accounts {
             if account.user == args.flag_account && account.protocol == Protocol::Smtp {
                 pop_smtp(&account, &connector, &args)?;
@@ -368,12 +414,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             }
         }
         panic!(format!("Account {} not found", args.flag_account));
-    } else {
-        for account in accounts {
-            if account.protocol == Protocol::Pop {
-                pop_smtp(&account, &connector, &args)?;
-            }
-        }
     }
     Ok(())
 }
