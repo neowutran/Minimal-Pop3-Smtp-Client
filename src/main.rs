@@ -1,7 +1,6 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::mem_forget)]
 
-use base64;
 use docopt::Docopt;
 use openssl::ssl::{SslConnector, SslMethod, SslStream};
 use regex::Regex;
@@ -81,7 +80,7 @@ fn read_singleline(stream: &mut SslStream<TcpStream>) -> Result<String, Box<dyn 
         String::from_utf8((&read_block(stream)?).to_vec())?
             .lines()
             .next()
-            .ok_or_else(|| "The line must exist")?,
+            .ok_or("The line must exist")?,
     ))
 }
 fn read_unencrypted_singleline(stream: &mut TcpStream) -> Result<String, Box<dyn Error>> {
@@ -92,7 +91,7 @@ fn read_unencrypted_singleline(stream: &mut TcpStream) -> Result<String, Box<dyn
         String::from_utf8((&block).to_vec())?
             .lines()
             .next()
-            .ok_or_else(|| "The line must exist")?,
+            .ok_or("The line must exist")?,
     ))
 }
 fn read_multiline_pop(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
@@ -137,9 +136,9 @@ fn biggest_mail_number(directory: &str) -> Result<u32, Box<dyn Error>> {
         let path = path?.path();
         let path_string = path
             .file_name()
-            .ok_or_else(|| "Filename must exist")?
+            .ok_or("Filename must exist")?
             .to_str()
-            .ok_or_else(|| "Filename must exist")?;
+            .ok_or("Filename must exist")?;
         let name: Vec<&str> = path_string.split(':').collect();
         let current: u32 = name[0].parse()?;
         if current > biggest {
@@ -192,7 +191,7 @@ fn get_password(account: &Account) -> Result<String, Box<dyn Error>> {
     Ok(String::from_utf8(eval.stdout)?
         .lines()
         .next()
-        .ok_or_else(|| "Unable to read the password")?
+        .ok_or("Unable to read the password")?
         .to_string())
 }
 fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
@@ -211,10 +210,10 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
         let config_line: Vec<&str> = line.splitn(2, ' ').collect();
         let key = config_line
             .get(0)
-            .ok_or_else(|| "Invalid config line structure. Expecting 'xxx xxx'")?;
+            .ok_or("Invalid config line structure. Expecting 'xxx xxx'")?;
         let value = config_line
             .get(1)
-            .ok_or_else(|| "Invalid config line structure. Expecting 'xxx xxx'")?;
+            .ok_or("Invalid config line structure. Expecting 'xxx xxx'")?;
         match *key{
           "host" => account.host = (*value).to_string(),
           "user" => account.user = (*value).to_string(),
@@ -258,11 +257,11 @@ fn download_mail(
     let stat_segments: Vec<&str> = stat.split(' ').collect();
     let biggest_message_number: u32 = stat_segments
         .get(1)
-        .ok_or_else(|| "Invalid response to 'stat' command. Expecting space delimited response")?
+        .ok_or("Invalid response to 'stat' command. Expecting space delimited response")?
         .parse()?;
     let size_in_octets: u64 = stat_segments
         .get(2)
-        .ok_or_else(|| "Invalid response to 'stat' command. Expecting space delimited reponse")?
+        .ok_or("Invalid response to 'stat' command. Expecting space delimited reponse")?
         .parse()?;
     println!(
         "{} messages, {:.2} Mo",
