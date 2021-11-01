@@ -2,7 +2,7 @@
 name = "pop_smtp"
 version = "0.1.0"
 authors = ["Neowutran <me@neowutran.ovh>"]
-edition = "2018"
+edition = "2021"
 description = "Pop3 and Smtp client for QubesOS"
 license = "GPL-3.0"
 readme = "Readme.md"

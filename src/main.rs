@@ -67,7 +67,7 @@ fn read_blocks(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>, Box<dy
 fn read_multiline_smtp(stream: &mut SslStream<TcpStream>) -> Result<String, Box<dyn Error>> {
     //  It doesn't follow the rfc: https://tools.ietf.org/html/rfc821#page-51
     //  It is way simpler, and should handle all of my personal use cases
-    let full: String = String::from_utf8((&read_block(stream)?).to_vec())?;
+    let full: String = String::from_utf8(read_block(stream)?)?;
     let segments: Vec<&str> = full.lines().collect();
     Ok(segments.join("\n"))
 }
@@ -77,7 +77,7 @@ fn flush(to_fill: &mut Vec<u8>, to_empty: &mut Vec<u8>) {
 }
 fn read_singleline(stream: &mut SslStream<TcpStream>) -> Result<String, Box<dyn Error>> {
     Ok(String::from(
-        String::from_utf8((&read_block(stream)?).to_vec())?
+        String::from_utf8(read_block(stream)?)?
             .lines()
             .next()
             .ok_or("The line must exist")?,
@@ -88,7 +88,7 @@ fn read_unencrypted_singleline(stream: &mut TcpStream) -> Result<String, Box<dyn
     let size = stream.read(&mut block)?;
     block.resize(size, 0);
     Ok(String::from(
-        String::from_utf8((&block).to_vec())?
+        String::from_utf8(block)?
             .lines()
             .next()
             .ok_or("The line must exist")?,
@@ -96,7 +96,7 @@ fn read_unencrypted_singleline(stream: &mut TcpStream) -> Result<String, Box<dyn
 }
 fn read_multiline_pop(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     let message_lines = read_blocks(stream)?;
-    let status_line = String::from_utf8((&message_lines[0]).to_vec())?;
+    let status_line = String::from_utf8((&message_lines[0]).clone())?;
     println!("{}", status_line);
     if !is_success_pop(&status_line) {
         panic!();
@@ -164,7 +164,7 @@ fn check_account(account: &mut Account) -> Result<(), Box<dyn Error>> {
     )?
     .is_match(&account.user)
     {
-        panic!(format!("{} is not a valid email adresse", account.user));
+        panic!("{} is not a valid email adresse", account.user);
     }
     let inbox_directory = format!("/home/user/mail/{}/INBOX", account.user);
     fs::create_dir_all(&inbox_directory)?;
@@ -183,10 +183,7 @@ fn get_password(account: &Account) -> Result<String, Box<dyn Error>> {
         .output()?;
     println!("GPG qube request: DONE");
     if !eval.status.success() {
-        panic!(format!(
-            "Unable read password: {}",
-            String::from_utf8(eval.stderr)?
-        ));
+        panic!("Unable read password: {}", String::from_utf8(eval.stderr)?);
     }
     Ok(String::from_utf8(eval.stdout)?
         .lines()
@@ -221,14 +218,14 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
           "tls" => match *value{
             "tls" => account.tls = Tls::Tls,
             "starttls" => account.tls = Tls::StartTls,
-            _ => panic!(format!("{} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values", value)),
+            _ => panic!("{} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values", value),
           },
           "protocol" => match *value{
             "pop" => account.protocol = Protocol::Pop,
             "smtp" => account.protocol = Protocol::Smtp,
-            _ => panic!(format!("{} doesn't exist for config 'protocol'. Only 'pop' and 'smtp' are acceptable values", value))
+            _ => panic!("{} doesn't exist for config 'protocol'. Only 'pop' and 'smtp' are acceptable values", value)
           }
-          _ => panic!(format!("{} is not a known config key", key)),
+          _ => panic!("{} is not a known config key", key),
         }
     }
     check_account(&mut account)?;
@@ -412,7 +409,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 return Ok(());
             }
         }
-        panic!(format!("Account {} not found", args.flag_account));
+        panic!("Account {} not found", args.flag_account);
     }
     Ok(())
 }
