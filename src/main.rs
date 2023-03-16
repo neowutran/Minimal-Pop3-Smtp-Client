@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::mem_forget)]
 
+use base64::{engine::general_purpose, Engine as _};
 use docopt::Docopt;
 use openssl::ssl::{SslConnector, SslMethod, SslStream};
 use regex::Regex;
@@ -18,11 +19,11 @@ fn is_success_pop(server_response: &str) -> bool {
     server_response.starts_with("+OK")
 }
 fn write(stream: &mut SslStream<TcpStream>, command_str: &str) -> Result<(), Box<dyn Error>> {
-    stream.ssl_write(format!("{}{}", command_str, NEWLINE).as_bytes())?;
+    stream.ssl_write(format!("{command_str}{NEWLINE}").as_bytes())?;
     Ok(())
 }
 fn write_unencrypted(stream: &mut TcpStream, command_str: &str) -> Result<(), Box<dyn Error>> {
-    stream.write_all(format!("{}{}", command_str, NEWLINE).as_bytes())?;
+    stream.write_all(format!("{command_str}{NEWLINE}").as_bytes())?;
     Ok(())
 }
 fn read_block(stream: &mut SslStream<TcpStream>) -> Result<Vec<u8>, Box<dyn Error>> {
@@ -96,8 +97,8 @@ fn read_unencrypted_singleline(stream: &mut TcpStream) -> Result<String, Box<dyn
 }
 fn read_multiline_pop(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     let message_lines = read_blocks(stream)?;
-    let status_line = String::from_utf8((&message_lines[0]).clone())?;
-    println!("{}", status_line);
+    let status_line = String::from_utf8(message_lines[0].clone())?;
+    println!("{status_line}");
     if !is_success_pop(&status_line) {
         panic!();
     }
@@ -147,14 +148,14 @@ fn biggest_mail_number(directory: &str) -> Result<u32, Box<dyn Error>> {
     }
     Ok(biggest)
 }
-fn default_account() -> Account {
+const fn default_account() -> Account {
     Account {
-        host: String::from(""),
-        user: String::from(""),
+        host: String::new(),
+        user: String::new(),
         port: 995,
         tls: Tls::Tls,
         protocol: Protocol::Pop,
-        maildir: String::from(""),
+        maildir: String::new(),
     }
 }
 
@@ -182,9 +183,11 @@ fn get_password(account: &Account) -> Result<String, Box<dyn Error>> {
         ))
         .output()?;
     println!("GPG qube request: DONE");
-    if !eval.status.success() {
-        panic!("Unable read password: {}", String::from_utf8(eval.stderr)?);
-    }
+    assert!(
+        eval.status.success(),
+        "Unable read password: {}",
+        String::from_utf8(eval.stderr)?
+    );
     Ok(String::from_utf8(eval.stdout)?
         .lines()
         .next()
@@ -206,7 +209,7 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
         }
         let config_line: Vec<&str> = line.splitn(2, ' ').collect();
         let key = config_line
-            .get(0)
+            .first()
             .ok_or("Invalid config line structure. Expecting 'xxx xxx'")?;
         let value = config_line
             .get(1)
@@ -218,14 +221,14 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
           "tls" => match *value{
             "tls" => account.tls = Tls::Tls,
             "starttls" => account.tls = Tls::StartTls,
-            _ => panic!("{} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values", value),
+            _ => panic!("{value} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values"),
           },
           "protocol" => match *value{
             "pop" => account.protocol = Protocol::Pop,
             "smtp" => account.protocol = Protocol::Smtp,
-            _ => panic!("{} doesn't exist for config 'protocol'. Only 'pop' and 'smtp' are acceptable values", value)
+            _ => panic!("{value} doesn't exist for config 'protocol'. Only 'pop' and 'smtp' are acceptable values")
           }
-          _ => panic!("{} is not a known config key", key),
+          _ => panic!("{key} is not a known config key"),
         }
     }
     check_account(&mut account)?;
@@ -261,8 +264,7 @@ fn download_mail(
         .ok_or("Invalid response to 'stat' command. Expecting space delimited reponse")?
         .parse()?;
     println!(
-        "{} messages, {:.2} Mo",
-        biggest_message_number,
+        "{biggest_message_number} messages, {:.2} Mo",
         size_in_octets as f64 / 1_000_000.0
     );
     let cur_biggest = biggest_mail_number(&format!("{}/cur", &account.maildir))?;
@@ -282,14 +284,14 @@ fn download_mail(
         ),
         Ordering::Less => {
             for message in biggest + 1..=biggest_message_number {
-                let tmp_filename = format!("{}/tmp/{}", account.maildir, message);
-                let filename = format!("{}/new/{}", account.maildir, message);
+                let tmp_filename = format!("{}/tmp/{message}", account.maildir);
+                let filename = format!("{}/new/{message}", account.maildir);
                 {
                     let mut file = fs::OpenOptions::new()
                         .write(true)
                         .create(true)
                         .open(&tmp_filename)?;
-                    write(tls_stream, &format!("retr {}", message))?;
+                    write(tls_stream, &format!("retr {message}"))?;
                     file.write_all(&read_multiline_pop(tls_stream)?.join(&LF))?;
                 }
                 if Path::new(&filename).exists() {
@@ -312,17 +314,17 @@ fn send_mail(
     println!("{}", read_multiline_smtp(tls_stream)?);
     write(tls_stream, "auth login")?;
     println!("{}", read_singleline(tls_stream)?);
-    write(tls_stream, &base64::encode(&account.user))?;
+    write(tls_stream, &general_purpose::STANDARD.encode(&account.user))?;
     println!("{}", read_singleline(tls_stream)?);
 
     let mut password = get_password(account)?;
-    let mut password_command = base64::encode(&password);
+    let mut password_command = general_purpose::STANDARD.encode(&password);
     write(tls_stream, &password_command)?;
     password.zeroize();
     password_command.zeroize();
 
     println!("{}", read_singleline(tls_stream)?);
-    singleline_command(tls_stream, &format!("mail from:<{}>", from))?;
+    singleline_command(tls_stream, &format!("mail from:<{from}>"))?;
     for recipient in to {
         singleline_command(tls_stream, &format!("rcpt to:<{}>", &recipient))?;
     }
@@ -349,7 +351,7 @@ fn pop_smtp(
     connector: &SslConnector,
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
-    let mut stream = TcpStream::connect(&format!("{}:{}", &account.host, &account.port))?;
+    let mut stream = TcpStream::connect(format!("{}:{}", &account.host, &account.port))?;
     if account.tls == Tls::StartTls {
         println!("{}", read_unencrypted_singleline(&mut stream)?);
         match account.protocol {
