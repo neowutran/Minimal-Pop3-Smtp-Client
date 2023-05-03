@@ -99,9 +99,7 @@ fn read_multiline_pop(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>,
     let message_lines = read_blocks(stream)?;
     let status_line = String::from_utf8(message_lines[0].clone())?;
     println!("{status_line}");
-    if !is_success_pop(&status_line) {
-        panic!();
-    }
+    assert!(is_success_pop(&status_line),);
     Ok(message_lines[1..].to_vec())
 }
 fn singleline_command(
@@ -330,8 +328,7 @@ fn send_mail(
     }
     let mut data = String::new();
     let stdin = io::stdin();
-    let mut handle = stdin.lock();
-    handle.read_to_string(&mut data)?;
+    stdin.lock().read_to_string(&mut data)?;
     write(tls_stream, "data")?;
     println!("{}", read_singleline(tls_stream)?);
 
