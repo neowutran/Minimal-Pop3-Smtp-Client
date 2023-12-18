@@ -239,9 +239,9 @@ fn download_mail(
     account: &Account,
     tls_stream: &mut SslStream<TcpStream>,
 ) -> Result<(), Box<dyn Error>> {
-    fs::create_dir_all(&format!("{}/cur", &account.maildir))?;
-    fs::create_dir_all(&format!("{}/new", &account.maildir))?;
-    fs::create_dir_all(&format!("{}/tmp", &account.maildir))?;
+    fs::create_dir_all(format!("{}/cur", &account.maildir))?;
+    fs::create_dir_all(format!("{}/new", &account.maildir))?;
+    fs::create_dir_all(format!("{}/tmp", &account.maildir))?;
     singleline_command(tls_stream, &format!("user {}", &account.user))?;
 
     let mut password = get_password(account)?;
