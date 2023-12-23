@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Install and update dependencies
-rustup update
+#rustup update
 #rustup component add clippy
 #cargo install cargo-audit
 #cargo install --force cargo-outdated

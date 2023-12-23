@@ -19,10 +19,15 @@ fn is_success_pop(server_response: &str) -> bool {
     server_response.starts_with("+OK")
 }
 fn write(stream: &mut SslStream<TcpStream>, command_str: &str) -> Result<(), Box<dyn Error>> {
+    stream.ssl_write(command_str.as_bytes())?;
+    Ok(())
+}
+fn write_line(stream: &mut SslStream<TcpStream>, command_str: &str) -> Result<(), Box<dyn Error>> {
     stream.ssl_write(format!("{command_str}{NEWLINE}").as_bytes())?;
     Ok(())
 }
-fn write_unencrypted(stream: &mut TcpStream, command_str: &str) -> Result<(), Box<dyn Error>> {
+
+fn write_unencrypted_line(stream: &mut TcpStream, command_str: &str) -> Result<(), Box<dyn Error>> {
     stream.write_all(format!("{command_str}{NEWLINE}").as_bytes())?;
     Ok(())
 }
@@ -106,7 +111,7 @@ fn singleline_command(
     stream: &mut SslStream<TcpStream>,
     command: &str,
 ) -> Result<(), Box<dyn Error>> {
-    write(stream, command)?;
+    write_line(stream, command)?;
     println!("{}", read_singleline(stream)?);
     Ok(())
 }
@@ -250,7 +255,7 @@ fn download_mail(
     password.zeroize();
     password_command.zeroize();
 
-    write(tls_stream, "stat")?;
+    write_line(tls_stream, "stat")?;
     let stat = read_singleline(tls_stream)?;
     let stat_segments: Vec<&str> = stat.split(' ').collect();
     let biggest_message_number: u32 = stat_segments
@@ -289,7 +294,7 @@ fn download_mail(
                         .write(true)
                         .create(true)
                         .open(&tmp_filename)?;
-                    write(tls_stream, &format!("retr {message}"))?;
+                    write_line(tls_stream, &format!("retr {message}"))?;
                     file.write_all(&read_multiline_pop(tls_stream)?.join(&LF))?;
                 }
                 if Path::new(&filename).exists() {
@@ -308,16 +313,16 @@ fn send_mail(
     from: &str,
     to: &[String],
 ) -> Result<(), Box<dyn Error>> {
-    write(tls_stream, &format!("ehlo {}", &account.host))?;
+    write_line(tls_stream, &format!("ehlo {}", &account.host))?;
     println!("{}", read_multiline_smtp(tls_stream)?);
-    write(tls_stream, "auth login")?;
+    write_line(tls_stream, "auth login")?;
     println!("{}", read_singleline(tls_stream)?);
-    write(tls_stream, &general_purpose::STANDARD.encode(&account.user))?;
+    write_line(tls_stream, &general_purpose::STANDARD.encode(&account.user))?;
     println!("{}", read_singleline(tls_stream)?);
 
     let mut password = get_password(account)?;
     let mut password_command = general_purpose::STANDARD.encode(&password);
-    write(tls_stream, &password_command)?;
+    write_line(tls_stream, &password_command)?;
     password.zeroize();
     password_command.zeroize();
 
@@ -329,16 +334,14 @@ fn send_mail(
     let mut data = String::new();
     let stdin = io::stdin();
     stdin.lock().read_to_string(&mut data)?;
-    write(tls_stream, "data")?;
+    write_line(tls_stream, "data")?;
     println!("{}", read_singleline(tls_stream)?);
 
-    // Didn't found anything in the RFC, but seems like the "max" message size without a null byte
-    // is 1024 for SMTP. So I just take the full message, chunk it and add null bytes.
-    for bytes in data.as_bytes().chunks(1023) {
-        write(tls_stream, &format!("{}\0", std::str::from_utf8(bytes)?))?;
+    for bytes in data.as_bytes().chunks(1024) {
+        write(tls_stream, std::str::from_utf8(bytes)?)?;
     }
 
-    write(tls_stream, ".")?;
+    write_line(tls_stream, &format!("{NEWLINE}."))?;
     println!("{}", read_singleline(tls_stream)?);
 
     Ok(())
@@ -352,8 +355,8 @@ fn pop_smtp(
     if account.tls == Tls::StartTls {
         println!("{}", read_unencrypted_singleline(&mut stream)?);
         match account.protocol {
-            Protocol::Pop => write_unencrypted(&mut stream, "stls")?,
-            Protocol::Smtp => write_unencrypted(&mut stream, "starttls")?,
+            Protocol::Pop => write_unencrypted_line(&mut stream, "stls")?,
+            Protocol::Smtp => write_unencrypted_line(&mut stream, "starttls")?,
         }
         println!("{}", read_unencrypted_singleline(&mut stream)?);
     }
