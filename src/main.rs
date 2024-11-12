@@ -18,26 +18,31 @@ static DOT: u8 = 46;
 fn is_success_pop(server_response: &str) -> bool {
     server_response.starts_with("+OK")
 }
-fn write(stream: &mut SslStream<TcpStream>, command_str: &str) -> Result<(), Box<dyn Error>> {
-    stream.ssl_write(command_str.as_bytes())?;
+fn write(stream: &mut Stream, command_str: &str) -> Result<(), Box<dyn Error>> {
+    match stream {
+        Stream::TlsStream(x) => {
+            x.ssl_write(command_str.as_bytes())?;
+        }
+        Stream::UnencryptedStream(x) => {
+            x.write_all(command_str.as_bytes())?;
+        }
+    }
     Ok(())
 }
-fn write_line(stream: &mut SslStream<TcpStream>, command_str: &str) -> Result<(), Box<dyn Error>> {
-    stream.ssl_write(format!("{command_str}{NEWLINE}").as_bytes())?;
-    Ok(())
+fn write_line(stream: &mut Stream, command_str: &str) -> Result<(), Box<dyn Error>> {
+    let command = format!("{command_str}{NEWLINE}");
+    write(stream, &command)
 }
-
-fn write_unencrypted_line(stream: &mut TcpStream, command_str: &str) -> Result<(), Box<dyn Error>> {
-    stream.write_all(format!("{command_str}{NEWLINE}").as_bytes())?;
-    Ok(())
-}
-fn read_block(stream: &mut SslStream<TcpStream>) -> Result<Vec<u8>, Box<dyn Error>> {
+fn read_block(stream: &mut Stream) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut block = vec![0; 512];
-    let size = stream.ssl_read(&mut block)?;
+    let size = match stream {
+        Stream::TlsStream(x) => x.ssl_read(&mut block)?,
+        Stream::UnencryptedStream(x) => x.read(&mut block)?,
+    };
     block.resize(size, 0);
     Ok(block)
 }
-fn read_blocks(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+fn read_blocks(stream: &mut Stream) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     let mut result = Vec::new();
     let mut current_line = Vec::new();
     let mut newline_buffer = Vec::new();
@@ -70,7 +75,7 @@ fn read_blocks(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>, Box<dy
         }
     }
 }
-fn read_multiline_smtp(stream: &mut SslStream<TcpStream>) -> Result<String, Box<dyn Error>> {
+fn read_multiline_smtp(stream: &mut Stream) -> Result<String, Box<dyn Error>> {
     //  It doesn't follow the rfc: https://tools.ietf.org/html/rfc821#page-51
     //  It is way simpler, and should handle all of my personal use cases
     let full: String = String::from_utf8(read_block(stream)?)?;
@@ -81,7 +86,7 @@ fn flush(to_fill: &mut Vec<u8>, to_empty: &mut Vec<u8>) {
     to_fill.append(to_empty);
     to_empty.clear();
 }
-fn read_singleline(stream: &mut SslStream<TcpStream>) -> Result<String, Box<dyn Error>> {
+fn read_singleline(stream: &mut Stream) -> Result<String, Box<dyn Error>> {
     Ok(String::from(
         String::from_utf8(read_block(stream)?)?
             .lines()
@@ -89,31 +94,21 @@ fn read_singleline(stream: &mut SslStream<TcpStream>) -> Result<String, Box<dyn 
             .ok_or("The line must exist")?,
     ))
 }
-fn read_unencrypted_singleline(stream: &mut TcpStream) -> Result<String, Box<dyn Error>> {
-    let mut block = vec![0; 512];
-    let size = stream.read(&mut block)?;
-    block.resize(size, 0);
-    Ok(String::from(
-        String::from_utf8(block)?
-            .lines()
-            .next()
-            .ok_or("The line must exist")?,
-    ))
-}
-fn read_multiline_pop(stream: &mut SslStream<TcpStream>) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
+fn read_multiline_pop(stream: &mut Stream) -> Result<Vec<Vec<u8>>, Box<dyn Error>> {
     let message_lines = read_blocks(stream)?;
     let status_line = String::from_utf8(message_lines[0].clone())?;
     println!("{status_line}");
     assert!(is_success_pop(&status_line),);
     Ok(message_lines[1..].to_vec())
 }
-fn singleline_command(
-    stream: &mut SslStream<TcpStream>,
-    command: &str,
-) -> Result<(), Box<dyn Error>> {
+fn singleline_command(stream: &mut Stream, command: &str) -> Result<(), Box<dyn Error>> {
     write_line(stream, command)?;
     println!("{}", read_singleline(stream)?);
     Ok(())
+}
+enum Stream {
+    TlsStream(SslStream<TcpStream>),
+    UnencryptedStream(TcpStream),
 }
 struct Account {
     host: String,
@@ -127,6 +122,7 @@ struct Account {
 enum Tls {
     StartTls,
     Tls,
+    None,
 }
 #[derive(PartialEq)]
 enum Protocol {
@@ -180,7 +176,7 @@ fn get_password(account: &Account) -> Result<String, Box<dyn Error>> {
     println!("GPG qube request: ASKING");
     let eval = Command::new("/bin/bash")
         .arg("-c")
-        .arg(&format!(
+        .arg(format!(
             "/usr/bin/qubes-gpg-client-wrapper --quiet --no-tty --decrypt /home/user/mail/{}/pass.asc",
             account.user
         ))
@@ -224,6 +220,7 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
           "tls" => match *value{
             "tls" => account.tls = Tls::Tls,
             "starttls" => account.tls = Tls::StartTls,
+            "none" => account.tls = Tls::None,
             _ => panic!("{value} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values"),
           },
           "protocol" => match *value{
@@ -234,29 +231,30 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
           _ => panic!("{key} is not a known config key"),
         }
     }
+    assert!(
+        !(account.tls == Tls::None && account.host != "127.0.0.1"),
+        "Absence of encryption is only allowed for 127.0.0.1"
+    );
     check_account(&mut account)?;
     all_accounts.push(account);
     Ok(all_accounts)
 }
 
 #[allow(clippy::cast_precision_loss)]
-fn download_mail(
-    account: &Account,
-    tls_stream: &mut SslStream<TcpStream>,
-) -> Result<(), Box<dyn Error>> {
+fn download_mail(account: &Account, stream: &mut Stream) -> Result<(), Box<dyn Error>> {
     fs::create_dir_all(format!("{}/cur", &account.maildir))?;
     fs::create_dir_all(format!("{}/new", &account.maildir))?;
     fs::create_dir_all(format!("{}/tmp", &account.maildir))?;
-    singleline_command(tls_stream, &format!("user {}", &account.user))?;
+    singleline_command(stream, &format!("user {}", &account.user))?;
 
     let mut password = get_password(account)?;
     let mut password_command = format!("pass {}", &password);
-    singleline_command(tls_stream, &password_command)?;
+    singleline_command(stream, &password_command)?;
     password.zeroize();
     password_command.zeroize();
 
-    write_line(tls_stream, "stat")?;
-    let stat = read_singleline(tls_stream)?;
+    write_line(stream, "stat")?;
+    let stat = read_singleline(stream)?;
     let stat_segments: Vec<&str> = stat.split(' ').collect();
     let biggest_message_number: u32 = stat_segments
         .get(1)
@@ -293,9 +291,10 @@ fn download_mail(
                     let mut file = fs::OpenOptions::new()
                         .write(true)
                         .create(true)
+                        .truncate(true)
                         .open(&tmp_filename)?;
-                    write_line(tls_stream, &format!("retr {message}"))?;
-                    file.write_all(&read_multiline_pop(tls_stream)?.join(&LF))?;
+                    write_line(stream, &format!("retr {message}"))?;
+                    file.write_all(&read_multiline_pop(stream)?.join(&LF))?;
                 }
                 if Path::new(&filename).exists() {
                     fs::remove_file(&filename)?;
@@ -309,40 +308,40 @@ fn download_mail(
 }
 fn send_mail(
     account: &Account,
-    tls_stream: &mut SslStream<TcpStream>,
+    stream: &mut Stream,
     from: &str,
     to: &[String],
 ) -> Result<(), Box<dyn Error>> {
-    write_line(tls_stream, &format!("ehlo {}", &account.host))?;
-    println!("{}", read_multiline_smtp(tls_stream)?);
-    write_line(tls_stream, "auth login")?;
-    println!("{}", read_singleline(tls_stream)?);
-    write_line(tls_stream, &general_purpose::STANDARD.encode(&account.user))?;
-    println!("{}", read_singleline(tls_stream)?);
+    write_line(stream, &format!("ehlo {}", &account.host))?;
+    println!("{}", read_multiline_smtp(stream)?);
+    write_line(stream, "auth login")?;
+    println!("{}", read_singleline(stream)?);
+    write_line(stream, &general_purpose::STANDARD.encode(&account.user))?;
+    println!("{}", read_singleline(stream)?);
 
     let mut password = get_password(account)?;
     let mut password_command = general_purpose::STANDARD.encode(&password);
-    write_line(tls_stream, &password_command)?;
+    write_line(stream, &password_command)?;
     password.zeroize();
     password_command.zeroize();
 
-    println!("{}", read_singleline(tls_stream)?);
-    singleline_command(tls_stream, &format!("mail from:<{from}>"))?;
+    println!("{}", read_singleline(stream)?);
+    singleline_command(stream, &format!("mail from:<{from}>"))?;
     for recipient in to {
-        singleline_command(tls_stream, &format!("rcpt to:<{}>", &recipient))?;
+        singleline_command(stream, &format!("rcpt to:<{}>", &recipient))?;
     }
     let mut data = String::new();
     let stdin = io::stdin();
     stdin.lock().read_to_string(&mut data)?;
-    write_line(tls_stream, "data")?;
-    println!("{}", read_singleline(tls_stream)?);
+    write_line(stream, "data")?;
+    println!("{}", read_singleline(stream)?);
 
     for bytes in data.as_bytes().chunks(1024) {
-        write(tls_stream, std::str::from_utf8(bytes)?)?;
+        write(stream, std::str::from_utf8(bytes)?)?;
     }
 
-    write_line(tls_stream, &format!("{NEWLINE}."))?;
-    println!("{}", read_singleline(tls_stream)?);
+    write_line(stream, &format!("{NEWLINE}."))?;
+    println!("{}", read_singleline(stream)?);
 
     Ok(())
 }
@@ -351,24 +350,34 @@ fn pop_smtp(
     connector: &SslConnector,
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
-    let mut stream = TcpStream::connect(format!("{}:{}", &account.host, &account.port))?;
+    let mut unencrypted_stream = Stream::UnencryptedStream(TcpStream::connect(format!(
+        "{}:{}",
+        &account.host, &account.port
+    ))?);
     if account.tls == Tls::StartTls {
-        println!("{}", read_unencrypted_singleline(&mut stream)?);
+        println!("{}", read_singleline(&mut unencrypted_stream)?);
         match account.protocol {
-            Protocol::Pop => write_unencrypted_line(&mut stream, "stls")?,
-            Protocol::Smtp => write_unencrypted_line(&mut stream, "starttls")?,
+            Protocol::Pop => write_line(&mut unencrypted_stream, "stls")?,
+            Protocol::Smtp => write_line(&mut unencrypted_stream, "starttls")?,
         }
-        println!("{}", read_unencrypted_singleline(&mut stream)?);
+        println!("{}", read_singleline(&mut unencrypted_stream)?);
     }
-    let mut tls_stream = connector.connect(&account.host, stream)?;
+    let mut generic_stream = if account.tls == Tls::None {
+        unencrypted_stream
+    } else {
+        match unencrypted_stream {
+            Stream::UnencryptedStream(x) => Stream::TlsStream(connector.connect(&account.host, x)?),
+            Stream::TlsStream(_) => panic!("impossible case"),
+        }
+    };
     if account.tls == Tls::Tls {
-        println!("{}", read_singleline(&mut tls_stream)?);
+        println!("{}", read_singleline(&mut generic_stream)?);
     }
     match account.protocol {
-        Protocol::Pop => download_mail(account, &mut tls_stream)?,
-        Protocol::Smtp => send_mail(account, &mut tls_stream, &args.flag_from, &args.arg_to)?,
+        Protocol::Pop => download_mail(account, &mut generic_stream)?,
+        Protocol::Smtp => send_mail(account, &mut generic_stream, &args.flag_from, &args.arg_to)?,
     }
-    singleline_command(&mut tls_stream, "quit")?;
+    singleline_command(&mut generic_stream, "quit")?;
     Ok(())
 }
 const USAGE: &str = "

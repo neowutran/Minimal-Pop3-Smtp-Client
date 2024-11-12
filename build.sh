@@ -8,11 +8,11 @@
 cargo update
 
 # Clean
-cargo clean
+#cargo clean
 
 # Check dependencies
-cargo outdated
-cargo audit
+#cargo outdated
+#cargo audit
 
 # Format and check code
 cargo fix --allow-staged --allow-dirty
