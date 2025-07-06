@@ -18,20 +18,20 @@ static DOT: u8 = 46;
 fn is_success_pop(server_response: &str) -> bool {
     server_response.starts_with("+OK")
 }
-fn write(stream: &mut Stream, command_str: &str) -> Result<(), Box<dyn Error>> {
+fn write(stream: &mut Stream, command_bytes: &[u8]) -> Result<(), Box<dyn Error>> {
     match stream {
         Stream::TlsStream(x) => {
-            x.ssl_write(command_str.as_bytes())?;
+            x.ssl_write(command_bytes)?;
         }
         Stream::UnencryptedStream(x) => {
-            x.write_all(command_str.as_bytes())?;
+            x.write_all(command_bytes)?;
         }
     }
     Ok(())
 }
 fn write_line(stream: &mut Stream, command_str: &str) -> Result<(), Box<dyn Error>> {
     let command = format!("{command_str}{NEWLINE}");
-    write(stream, &command)
+    write(stream, command.as_bytes())
 }
 fn read_block(stream: &mut Stream) -> Result<Vec<u8>, Box<dyn Error>> {
     let mut block = vec![0; 512];
@@ -330,14 +330,14 @@ fn send_mail(
     for recipient in to {
         singleline_command(stream, &format!("rcpt to:<{}>", &recipient))?;
     }
-    let mut data = String::new();
+    let mut data = Vec::new();
     let stdin = io::stdin();
-    stdin.lock().read_to_string(&mut data)?;
+    stdin.lock().read_to_end(&mut data)?;
     write_line(stream, "data")?;
     println!("{}", read_singleline(stream)?);
 
-    for bytes in data.as_bytes().chunks(1024) {
-        write(stream, std::str::from_utf8(bytes)?)?;
+    for bytes in data.chunks(1024) {
+        write(stream, bytes)?;
     }
 
     write_line(stream, &format!("{NEWLINE}."))?;
