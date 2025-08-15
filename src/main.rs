@@ -2,10 +2,10 @@
 #![deny(clippy::mem_forget)]
 
 use base64::{engine::general_purpose, Engine as _};
-use docopt::Docopt;
+use clap_derive::Parser;
+use clap::Parser;
 use openssl::ssl::{SslConnector, SslMethod, SslStream};
 use regex::Regex;
-use serde::Deserialize;
 use std::{
     cmp::Ordering, error::Error, fs, fs::File, io, io::prelude::*, net::TcpStream, path::Path,
     process::Command,
@@ -122,7 +122,6 @@ struct Account {
 enum Tls {
     StartTls,
     Tls,
-    None,
 }
 #[derive(PartialEq)]
 enum Protocol {
@@ -220,7 +219,6 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
           "tls" => match *value{
             "tls" => account.tls = Tls::Tls,
             "starttls" => account.tls = Tls::StartTls,
-            "none" => account.tls = Tls::None,
             _ => panic!("{value} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values"),
           },
           "protocol" => match *value{
@@ -231,10 +229,6 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
           _ => panic!("{key} is not a known config key"),
         }
     }
-    assert!(
-        !(account.tls == Tls::None && account.host != "127.0.0.1"),
-        "Absence of encryption is only allowed for 127.0.0.1"
-    );
     check_account(&mut account)?;
     all_accounts.push(account);
     Ok(all_accounts)
@@ -362,52 +356,39 @@ fn pop_smtp(
         }
         println!("{}", read_singleline(&mut unencrypted_stream)?);
     }
-    let mut generic_stream = if account.tls == Tls::None {
-        unencrypted_stream
-    } else {
-        match unencrypted_stream {
+    let mut generic_stream = match unencrypted_stream {
             Stream::UnencryptedStream(x) => Stream::TlsStream(connector.connect(&account.host, x)?),
             Stream::TlsStream(_) => panic!("impossible case"),
-        }
-    };
+        };
     if account.tls == Tls::Tls {
         println!("{}", read_singleline(&mut generic_stream)?);
     }
     match account.protocol {
         Protocol::Pop => download_mail(account, &mut generic_stream)?,
-        Protocol::Smtp => send_mail(account, &mut generic_stream, &args.flag_from, &args.arg_to)?,
+        Protocol::Smtp => send_mail(account, &mut generic_stream, &args.from, &args.to)?,
     }
     singleline_command(&mut generic_stream, "quit")?;
     Ok(())
 }
-const USAGE: &str = "
-pop_smtp client for neomutt.
 
-Usage:
-  pop_smtp
-  pop_smtp -a ACCOUNT -f SOURCE [--] <to>...
-  pop_smtp (-h | --help)
-  pop_smtp --version
-
-Options:
-  -h --help     Show this screen.
-  --version     Show version.
-  -f SOURCE --from=SOURCE     Source email.
-  -a ACCOUNT --account=ACCOUNT   Account.
-";
-#[derive(Debug, Deserialize)]
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
 struct Args {
-    arg_to: Vec<String>,
-    flag_from: String,
-    flag_account: String,
+    
+    #[arg(short, long)]
+    account: String,
+    
+    #[arg(short, long)]
+    from: String,
+ 
+    to: Vec<String>,
 }
+
 fn main() -> Result<(), Box<dyn Error>> {
-    let args: Args = Docopt::new(USAGE)
-        .and_then(|d| d.deserialize())
-        .unwrap_or_else(|e| e.exit());
+    let args = Args::parse();
     let accounts = read_config()?;
     let connector = SslConnector::builder(SslMethod::tls())?.build();
-    if args.flag_account.is_empty() {
+    if args.account.is_empty() {
         for account in accounts {
             if account.protocol == Protocol::Pop {
                 pop_smtp(&account, &connector, &args)?;
@@ -415,12 +396,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     } else {
         for account in accounts {
-            if account.user == args.flag_account && account.protocol == Protocol::Smtp {
+            if account.user == args.account && account.protocol == Protocol::Smtp {
                 pop_smtp(&account, &connector, &args)?;
                 return Ok(());
             }
         }
-        panic!("Account {} not found", args.flag_account);
+        panic!("Account {} not found", args.account);
     }
     Ok(())
 }
