@@ -351,7 +351,7 @@ fn pop_smtp(
     if account.tls == Tls::StartTls {
         println!("{}", read_singleline(&mut unencrypted_stream)?);
         match account.protocol {
-            Protocol::Pop => write_line(&mut unencrypted_stream, "stls")?,
+            Protocol::Pop => write_line(&mut unencrypted_stream, "tls")?,
             Protocol::Smtp => write_line(&mut unencrypted_stream, "starttls")?,
         }
         println!("{}", read_singleline(&mut unencrypted_stream)?);
