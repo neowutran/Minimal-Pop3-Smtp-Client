@@ -1,9 +1,9 @@
 #![forbid(unsafe_code)]
 #![deny(clippy::mem_forget)]
 
-use base64::{engine::general_purpose, Engine as _};
-use clap_derive::Parser;
+use base64::{Engine as _, engine::general_purpose};
 use clap::Parser;
+use clap_derive::Parser;
 use openssl::ssl::{SslConnector, SslMethod, SslStream};
 use regex::Regex;
 use std::{
@@ -212,21 +212,25 @@ fn read_config() -> Result<Vec<Account>, Box<dyn Error>> {
         let value = config_line
             .get(1)
             .ok_or("Invalid config line structure. Expecting 'xxx xxx'")?;
-        match *key{
-          "host" => account.host = (*value).to_string(),
-          "user" => account.user = (*value).to_string(),
-          "port" => account.port = value.parse()?,
-          "tls" => match *value{
-            "tls" => account.tls = Tls::Tls,
-            "starttls" => account.tls = Tls::StartTls,
-            _ => panic!("{value} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values"),
-          },
-          "protocol" => match *value{
-            "pop" => account.protocol = Protocol::Pop,
-            "smtp" => account.protocol = Protocol::Smtp,
-            _ => panic!("{value} doesn't exist for config 'protocol'. Only 'pop' and 'smtp' are acceptable values")
-          }
-          _ => panic!("{key} is not a known config key"),
+        match *key {
+            "host" => account.host = (*value).to_string(),
+            "user" => account.user = (*value).to_string(),
+            "port" => account.port = value.parse()?,
+            "tls" => match *value {
+                "tls" => account.tls = Tls::Tls,
+                "starttls" => account.tls = Tls::StartTls,
+                _ => panic!(
+                    "{value} doesn't exist for config 'tls'. Only 'tls' and 'starttls' are acceptable values"
+                ),
+            },
+            "protocol" => match *value {
+                "pop" => account.protocol = Protocol::Pop,
+                "smtp" => account.protocol = Protocol::Smtp,
+                _ => panic!(
+                    "{value} doesn't exist for config 'protocol'. Only 'pop' and 'smtp' are acceptable values"
+                ),
+            },
+            _ => panic!("{key} is not a known config key"),
         }
     }
     check_account(&mut account)?;
@@ -327,6 +331,7 @@ fn send_mail(
     let mut data = Vec::new();
     let stdin = io::stdin();
     stdin.lock().read_to_end(&mut data)?;
+    println!("{data:X?}");
     write_line(stream, "data")?;
     println!("{}", read_singleline(stream)?);
 
@@ -357,9 +362,9 @@ fn pop_smtp(
         println!("{}", read_singleline(&mut unencrypted_stream)?);
     }
     let mut generic_stream = match unencrypted_stream {
-            Stream::UnencryptedStream(x) => Stream::TlsStream(connector.connect(&account.host, x)?),
-            Stream::TlsStream(_) => panic!("impossible case"),
-        };
+        Stream::UnencryptedStream(x) => Stream::TlsStream(connector.connect(&account.host, x)?),
+        Stream::TlsStream(_) => panic!("impossible case"),
+    };
     if account.tls == Tls::Tls {
         println!("{}", read_singleline(&mut generic_stream)?);
     }
@@ -374,13 +379,12 @@ fn pop_smtp(
 #[derive(Parser, Debug)]
 #[command(version, about, long_about = None)]
 struct Args {
-    
     #[arg(short, long)]
     account: String,
-    
+
     #[arg(short, long)]
     from: String,
- 
+
     to: Vec<String>,
 }
 
