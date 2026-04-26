@@ -3,7 +3,7 @@
 
 use base64::{Engine as _, engine::general_purpose};
 use clap::Parser;
-use clap_derive::Parser;
+use dnssec_resolver_noroot::wrappers::{DaneTlsConnector, openssl::OpenSslDaneConnector};
 use openssl::ssl::{SslConnector, SslMethod, SslStream};
 use regex::Regex;
 use std::{
@@ -346,7 +346,7 @@ fn send_mail(
 }
 fn pop_smtp(
     account: &Account,
-    connector: &SslConnector,
+    connector: &mut OpenSslDaneConnector,
     args: &Args,
 ) -> Result<(), Box<dyn Error>> {
     let mut unencrypted_stream = Stream::UnencryptedStream(TcpStream::connect(format!(
@@ -362,7 +362,9 @@ fn pop_smtp(
         println!("{}", read_singleline(&mut unencrypted_stream)?);
     }
     let mut generic_stream = match unencrypted_stream {
-        Stream::UnencryptedStream(x) => Stream::TlsStream(connector.connect(&account.host, x)?),
+        Stream::UnencryptedStream(x) => {
+            Stream::TlsStream(connector.connect_with_stream(&account.host, x)?)
+        }
         Stream::TlsStream(_) => panic!("impossible case"),
     };
     if account.tls == Tls::Tls {
@@ -391,17 +393,18 @@ struct Args {
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
     let accounts = read_config()?;
-    let connector = SslConnector::builder(SslMethod::tls())?.build();
+    let builder = SslConnector::builder(SslMethod::tls())?;
+    let mut connector = OpenSslDaneConnector::new(builder, false)?;
     if args.account.is_empty() {
         for account in accounts {
             if account.protocol == Protocol::Pop {
-                pop_smtp(&account, &connector, &args)?;
+                pop_smtp(&account, &mut connector, &args)?;
             }
         }
     } else {
         for account in accounts {
             if account.user == args.account && account.protocol == Protocol::Smtp {
-                pop_smtp(&account, &connector, &args)?;
+                pop_smtp(&account, &mut connector, &args)?;
                 return Ok(());
             }
         }
