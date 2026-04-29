@@ -30,4 +30,4 @@ zeroize = "1"
 clap = {version = "4", features=['derive']}
 clap_derive = "4"
 env_logger = "0"
-dnssec-resolver-noroot   = { git = "https://git.sr.ht/~yukikoo/dane_resolver_without_root", features = ["wrapper_openssl"]}
+dane-without-root = { git = "https://git.sr.ht/~yukikoo/dane_resolver_without_root", features = ["wrapper_openssl"]}

@@ -3,7 +3,7 @@
 
 use base64::{Engine as _, engine::general_purpose};
 use clap::Parser;
-use dnssec_resolver_noroot::wrappers::{DaneTlsConnector, openssl::OpenSslDaneConnector};
+use dane_without_root::wrappers::{DaneTlsConnector, openssl::OpenSslDaneConnector};
 use openssl::ssl::{SslConnector, SslMethod, SslStream};
 use regex::Regex;
 use std::{
