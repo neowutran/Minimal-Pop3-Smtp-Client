@@ -391,6 +391,7 @@ struct Args {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    env_logger::init();
     let args = Args::parse();
     let accounts = read_config()?;
     let builder = SslConnector::builder(SslMethod::tls())?;
